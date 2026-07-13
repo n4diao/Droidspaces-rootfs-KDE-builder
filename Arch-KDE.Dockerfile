@@ -3,6 +3,7 @@ FROM ogarcia/archlinux AS customizer
 
 #######################################################
 ARG BUILD_KDE
+ARG BUILD_KDE_plus
 ARG PulseAudio
 ARG ENABLE_zh_tz_ARG
 ARG ENABLE_binfmt_ARG
@@ -13,6 +14,7 @@ ARG ENABLE_zip_ARG
 ARG ENABLE_docker_ARG
 ARG ENABLE_srf_ARG
 ARG ENABLE_tmoe_ARG
+ARG USERNAME
 ######################################################
 
 
@@ -102,36 +104,29 @@ RUN echo "en_US.UTF-8 UTF-8" > /etc/locale.gen && \
     sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config && \
     # 如果容器内存在默认的 alarm 或 arch 用户，则清理
     userdel -r alarm 2>/dev/null || true && \
-    useradd -m -s /bin/bash Gold && echo "Gold:1234" | chpasswd && \
+    useradd -m -s /bin/bash ${USERNAME} && echo "${USERNAME}:1234" | chpasswd && \
     systemctl enable sshd
 
 
 # 添加环境变量 (注意每个变量前都加了 export)
 RUN cat <<'EOF' > /etc/profile.d/custom_env.sh
-export MESA_LOADER_DRIVER_OVERRIDE=kgsl
-export TU_DEBUG=noconform
 export XCURSOR_SIZE=48
-export XMODIFIERS=@im=fcitx5
-export GTK_IM_MODULE=fcitx5
-export QT_IM_MODULE=fcitx5
-export SDL_IM_MODULE=fcitx5
-export GLFW_IM_MODULE=fcitx
-export DISPLAY=:1
+export DISPLAY=:5
 EOF
-
 # 音频选择
 RUN if [ "$PulseAudio" = "socket" ]; then \
-        echo 'export PULSE_SERVER="unix:/tmp/.pulse-socket"' >> /etc/profile.d/custom_env.sh; \
+        echo "export PULSE_SERVER=unix:/tmp/.pulse-socket" >> /etc/profile.d/custom_env.sh; \
     elif [ "$PulseAudio" = "tcp" ]; then \
-        echo 'export PULSE_SERVER="tcp:127.0.0.1:4713"' >> /etc/profile.d/custom_env.sh; \
+        echo "export PULSE_SERVER=tcp:127.0.0.1:4713" >> /etc/profile.d/custom_env.sh; \
     fi
 RUN chmod +x /etc/profile.d/custom_env.sh
 
 # 输入法与 KDE 开机自启动配置
+COPY scripts/start/ /tmp/droidspaces-start/
 RUN <<'EOF_RUN'
     if [ "$ENABLE_srf_ARG" = "true" ]; then
-    mkdir -p /home/Gold/.config/autostart
-    cat <<'EOF' > /home/Gold/.config/autostart/fcitx5.desktop
+    mkdir -p /home/${USERNAME}/.config/autostart
+    cat <<'EOF' > /home/${USERNAME}/.config/autostart/fcitx5.desktop
 [Desktop Entry]
 Name=Fcitx5
 GenericName=Input Method
@@ -144,16 +139,29 @@ Categories=System;Utility;
 StartupNotify=false
 NoDisplay=true
 EOF
+    cat <<'EOF' >> /etc/profile.d/custom_env.sh
+export XMODIFIERS=@im=fcitx5
+export GTK_IM_MODULE=fcitx5
+export QT_IM_MODULE=fcitx5
+export SDL_IM_MODULE=fcitx5
+export GLFW_IM_MODULE=fcitx
+EOF
 fi
-    echo 'export XDG_RUNTIME_DIR=/run/user/$(id -u)' >> /home/Gold/.bashrc
+    if [ "$ENABLE_mesa_ARG" = "true" ] ; then
+        cat <<'EOF' >> /etc/profile.d/custom_env.sh
+export MESA_LOADER_DRIVER_OVERRIDE=kgsl
+export TU_DEBUG=noconform
+EOF
+    fi
+    echo 'export XDG_RUNTIME_DIR=/run/user/$(id -u)' >> /home/${USERNAME}/.bashrc
     if [ "$BUILD_KDE" = "min" ] || [ "$BUILD_KDE" = "conc" ] ; then
-    mkdir -p /home/Gold/.config 
-    cat <<'EOF' > /home/Gold/.config/kwinrc
+    mkdir -p /home/${USERNAME}/.config
+    cat <<'EOF' > /home/${USERNAME}/.config/kwinrc
 [Compositing]
 Enabled=false
 EOF
     fi
-    chown -R Gold:Gold /home/Gold
+    chown -R ${USERNAME}:${USERNAME} /home/${USERNAME}
     if [ "$BUILD_KDE" = "conc" ] || [ "$BUILD_KDE" = "min" ] ; then
     cat <<'EOF' > /usr/local/bin/startplasma-x11
 #!/bin/bash
@@ -161,9 +169,15 @@ exec dbus-run-session /usr/bin/startplasma-x11 "$@"
 EOF
     chmod +x /usr/local/bin/startplasma-x11
     fi
+    if [ "$BUILD_KDE_plus" = "true" ] ; then
+    install -Dm644 /tmp/droidspaces-start/plasma-x11.service /etc/systemd/system/plasma-x11.service
+    mkdir -p /etc/systemd/system/multi-user.target.wants
+    ln -sf /etc/systemd/system/plasma-x11.service /etc/systemd/system/multi-user.target.wants/plasma-x11.service
+    fi
+    rm -rf /tmp/droidspaces-start
 EOF_RUN
 
-# 下载并安装 Mesa (已集成 SigLevel 绕过修复)
+# 下载并安装 Mesa
 RUN if [ "$ENABLE_mesa_ARG" = "true" ]; then \
         echo "--> [开启] 正在下载并安装最新版 Mesa 驱动..." && \
         URL=$(curl -s https://api.github.com/repos/lfdevs/mesa-for-android-container/releases/latest | \
@@ -207,7 +221,7 @@ grep -q '^aid_net_admin:' /etc/group || echo 'aid_net_admin:x:3005:' >> /etc/gro
 getent group droidspaces-gpu >/dev/null || groupadd -g 786 -r droidspaces-gpu
 # 为 root 用户赋予访问 Android 硬件及网络的权限组
 usermod -a -G aid_inet,aid_net_raw,input,video,tty,droidspaces-gpu root || true
-usermod -a -G aid_inet,aid_net_raw,input,video,tty,wheel,droidspaces-gpu Gold || true
+usermod -a -G aid_inet,aid_net_raw,input,video,tty,wheel,droidspaces-gpu ${USERNAME} || true
 
 # 确保 Arch 赋予 sudo 权限给 wheel 组
 sed -i 's/^# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' /etc/sudoers
@@ -234,7 +248,6 @@ MaxLevelStore=info
 EOT
 
 mkdir -p /etc/systemd/system/multi-user.target.wants
-# Arch Linux 的 systemd 库路径是 /usr/lib 而不是 /lib
 GUEST_SYSTEMD_PATH="/usr/lib/systemd/system"
 
 if [ -f "$GUEST_SYSTEMD_PATH/dbus.service" ]; then
@@ -285,7 +298,7 @@ for unit in NetworkManager.service dhcpcd.service systemd-resolved.service syste
         cat > "/etc/systemd/system/${unit}.d/99-netmode-limit.conf" << 'EOF'
 [Service]
 ExecCondition=
-ExecCondition=/bin/sh -c "grep -q 'net_mode=nat' /run/droidspaces/container.config"
+ExecCondition=/bin/sh -c "grep -qE 'net_mode=(nat|gateway)' /run/droidspaces/container.config"
 EOF
     fi
 done
@@ -327,7 +340,7 @@ RUN if [ "$ENABLE_binfmt_ARG" = "true" ]; then \
         chmod 644 /etc/systemd/system/qemu-binfmt-register.service && \
         mkdir -p /etc/systemd/system/multi-user.target.wants && \
         ln -sf /etc/systemd/system/qemu-binfmt-register.service /etc/systemd/system/multi-user.target.wants/qemu-binfmt-register.service && \
-        pacman -S --noconfirm --needed qemu-user-static && \
+        pacman -S --noconfirm --needed qemu-user qemu-user-binfmt && \
         rm -rf /var/cache/pacman/pkg/* /var/lib/pacman/sync/* ; \
     else \
         rm -f /usr/local/bin/qemu-binfmt-register.sh /etc/systemd/system/qemu-binfmt-register.service; \

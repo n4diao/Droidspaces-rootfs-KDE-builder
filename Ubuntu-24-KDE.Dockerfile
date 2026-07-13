@@ -3,6 +3,7 @@ FROM ubuntu:24.04 AS customizer
 
 #######################################################
 ARG BUILD_KDE
+ARG BUILD_KDE_plus
 ARG PulseAudio
 ARG ENABLE_zh_tz_ARG
 ARG ENABLE_binfmt_ARG
@@ -13,20 +14,39 @@ ARG ENABLE_zip_ARG
 ARG ENABLE_docker_ARG
 ARG ENABLE_srf_ARG
 ARG ENABLE_tmoe_ARG
+ARG ENABLE_nosnap_ARG
+ARG USERNAME
 ######################################################
 
 ENV DEBIAN_FRONTEND=noninteractive
 
+# 启用 APT 并行连接、HTTP(S) pipeline 和下载重试
+RUN printf '%s\n' \
+    'Acquire::Queue-Mode "host";' \
+    'Acquire::http::Pipeline-Depth "10";' \
+    'Acquire::https::Pipeline-Depth "10";' \
+    'Acquire::Retries "3";' \
+    > /etc/apt/apt.conf.d/99parallel-downloads
 
 # 优先复制自定义脚本
 COPY scripts/download-firmware /usr/local/bin/
+COPY scripts/nosnap.sh /usr/local/sbin/nosnap
 
 # 将自定义的 bashrc 脚本复制到根文件系统的 profile 目录
 COPY scripts/bashrc.sh /etc/profile.d/ds-aliases.sh
 
 # 赋予相关脚本可执行权限
-RUN chmod +x /usr/local/bin/download-firmware /etc/profile.d/ds-aliases.sh
+RUN chmod +x /usr/local/bin/download-firmware /usr/local/sbin/nosnap /etc/profile.d/ds-aliases.sh
 
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates curl wget && \
+    if [ "$ENABLE_nosnap_ARG" = "true" ]; then \
+        echo "--> [开启] nosnap: 正在预配置并移除 Ubuntu Snap..." && \
+        bash /usr/local/sbin/nosnap; \
+    else \
+        echo "--> [跳过] 未开启 nosnap"; \
+    fi && \
+    rm -f /usr/local/sbin/nosnap
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
@@ -115,20 +135,13 @@ RUN sed -i '/en_US.UTF-8/s/^# //' /etc/locale.gen && \
     sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config && \
     # 如果容器内存在默认的 debian 用户，则将其连同家目录一起删除
     deluser --remove-home ubuntu || true && \
-    useradd -m -s /bin/bash Gold && echo "Gold:1234" | chpasswd && \
+    useradd -m -s /bin/bash ${USERNAME} && echo "${USERNAME}:1234" | chpasswd && \
     systemctl enable ssh
 
 # 添加环境变量
 RUN cat <<'EOF' > /etc/environment
-MESA_LOADER_DRIVER_OVERRIDE=kgsl
-TU_DEBUG=noconform
 XCURSOR_SIZE=48
-XMODIFIERS=@im=fcitx5
-GTK_IM_MODULE=fcitx5
-QT_IM_MODULE=fcitx5
-SDL_IM_MODULE=fcitx5
-GLFW_IM_MODULE=fcitx
-DISPLAY=:1
+DISPLAY=:5
 EOF
 # 音频选择
 RUN if [ "$PulseAudio" = "socket" ]; then \
@@ -138,10 +151,11 @@ RUN if [ "$PulseAudio" = "socket" ]; then \
     fi
 
 # 输入法开机自启动
+COPY scripts/start/ /tmp/droidspaces-start/
 RUN <<'EOF_RUN'
     if [ "$ENABLE_srf_ARG" = "true" ]; then
-    mkdir -p /home/Gold/.config/autostart
-    cat <<'EOF' > /home/Gold/.config/autostart/fcitx5.desktop
+    mkdir -p /home/${USERNAME}/.config/autostart
+    cat <<'EOF' > /home/${USERNAME}/.config/autostart/fcitx5.desktop
 [Desktop Entry]
 Name=Fcitx5
 GenericName=Input Method
@@ -154,16 +168,36 @@ Categories=System;Utility;
 StartupNotify=false
 NoDisplay=true
 EOF
+    cat <<'EOF' >> /etc/environment
+XMODIFIERS=@im=fcitx5
+GTK_IM_MODULE=fcitx5
+QT_IM_MODULE=fcitx5
+SDL_IM_MODULE=fcitx5
+GLFW_IM_MODULE=fcitx
+EOF
 fi
-    echo 'export XDG_RUNTIME_DIR=/run/user/$(id -u)' >> /home/Gold/.bashrc
+    if [ "$ENABLE_mesa_ARG" = "true" ] ; then
+        cat <<'EOF' >> /etc/environment
+MESA_LOADER_DRIVER_OVERRIDE=kgsl
+TU_DEBUG=noconform
+EOF
+    fi
+
+    echo 'export XDG_RUNTIME_DIR=/run/user/$(id -u)' >> /home/${USERNAME}/.bashrc
     if [ "$BUILD_KDE" = "min" ] || [ "$BUILD_KDE" = "conc" ] ; then
-    mkdir -p /home/Gold/.config 
-    cat <<'EOF' > /home/Gold/.config/kwinrc
+    mkdir -p /home/${USERNAME}/.config
+    cat <<'EOF' > /home/${USERNAME}/.config/kwinrc
 [Compositing]
 Enabled=false
 EOF
     fi
-    chown -R Gold:Gold /home/Gold
+    chown -R ${USERNAME}:${USERNAME} /home/${USERNAME}
+    if [ "$BUILD_KDE_plus" = "true" ] ; then
+    install -Dm644 /tmp/droidspaces-start/plasma-x11.service /etc/systemd/system/plasma-x11.service
+    mkdir -p /etc/systemd/system/multi-user.target.wants
+    ln -sf /etc/systemd/system/plasma-x11.service /etc/systemd/system/multi-user.target.wants/plasma-x11.service
+    fi
+    rm -rf /tmp/droidspaces-start
 EOF_RUN
 
 RUN if [ "$ENABLE_mesa_ARG" = "true" ]; then \
@@ -208,7 +242,7 @@ grep -q '^aid_net_admin:' /etc/group || echo 'aid_net_admin:x:3005:' >> /etc/gro
 getent group droidspaces-gpu >/dev/null || groupadd -g 786 -r droidspaces-gpu
 # 为 root 用户赋予访问 Android 硬件及网络的权限组
 usermod -a -G aid_inet,aid_net_raw,input,video,tty,droidspaces-gpu root || true
-usermod -a -G aid_inet,aid_net_raw,input,video,tty,sudo,droidspaces-gpu Gold || true
+usermod -a -G aid_inet,aid_net_raw,input,video,tty,sudo,droidspaces-gpu ${USERNAME} || true
 
 # 将 _apt 的主用户组改为 aid_inet，确保 apt 包管理器在 Android 环境下可以正常联网
 grep -q '^_apt:' /etc/passwd && usermod -g aid_inet _apt || true
@@ -295,7 +329,7 @@ for unit in NetworkManager.service dhcpcd.service systemd-resolved.service syste
         cat > "/etc/systemd/system/${unit}.d/99-netmode-limit.conf" << 'EOF'
 [Service]
 ExecCondition=
-ExecCondition=/bin/sh -c "grep -q 'net_mode=nat' /run/droidspaces/container.config"
+ExecCondition=/bin/sh -c "grep -qE 'net_mode=(nat|gateway)' /run/droidspaces/container.config"
 EOF
     fi
 done

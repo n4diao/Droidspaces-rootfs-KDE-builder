@@ -1,10 +1,10 @@
-name: 编译并发布 Droidspaces RootFS
+name: Build and Release Droidspaces RootFS
 
 on:
   workflow_dispatch: 
     inputs:
       build_target:
-        description: '选择要构建的发行版'
+        description: 'Select the distribution to build'
         required: true
         type: choice
         default: 'Debian-13-KDE'
@@ -19,12 +19,12 @@ on:
           - 'all'
           - 'all-wayland'
       custom_username:
-        description: '自定义用户名（默认 Gold）'
+        description: 'Custom username (default: Gold)'
         required: false
         type: string
         default: 'Gold'
       build_KDE:
-        description: 'KDE桌面选择(conc-精简 min-最小构造 mobile-移动版 none-不用KDE)'
+        description: 'KDE desktop choice (conc-compact, min-minimal, mobile-mobile edition, none-no KDE)'
         required: true
         type: choice
         default: 'min'
@@ -34,17 +34,17 @@ on:
           - 'mobile'
           - 'none'
       build_KDE_plus:
-        description: 'KDE 桌面开机自启动 (需要 KDE 桌面选择为 conc、min 或 mobile)'
+        description: 'KDE desktop auto-start on boot (Requires KDE desktop choice to be conc, min, or mobile)'
         required: true
         type: boolean
         default: true
       enable_anland_kde:
-        description: 'Wayland 支持（支持 Debian-13、Ubuntu-26、Fedora-43/44,选择 mobile 强制 wayland）'
+        description: 'Wayland support (supported on Debian-13, Ubuntu-26, Fedora-43/44; mobile forces Wayland).'
         required: true
         type: boolean
         default: false
       PulseAudio:
-        description: 'PulseAudio 音频转发'
+        description: 'PulseAudio audio forwarding'
         required: true
         type: choice
         default: 'socket'
@@ -53,64 +53,64 @@ on:
           - 'tcp'
           - 'none'
       enable_zh_tz:
-        description: '使用 中文 语言，并更改时区'
+        description: 'Use Chinese language and change timezone'
         required: true
         type: boolean
-        default: true
+        default: false
       enable_mesa:
-        description: '开启 高通骁龙GPU 支持'
+        description: 'Enable Qualcomm Snapdragon GPU support'
         required: true
         type: boolean
         default: true
       enable_tmoe:
-        description: '集成 TMOE '
+        description: 'Integrate TMOE'
         required: true
         type: boolean
         default: true
       nosnap:
-        description: 'nosnap: 干掉 Ubuntu 的 Snap'
+        description: 'nosnap: remove Ubuntu Snap'
         required: true
         type: boolean
         default: false
       enable_srf:
-        description: '开启 输入法 fcitx5 支持'
+        description: 'Enable input method fcitx5 support'
         required: true
         type: boolean
         default: false
       enable_binfmt:
-        description: '开启 跨架构 支持'
+        description: 'Enable cross-architecture support'
         required: true
         type: boolean
         default: false
       enable_yj:
-        description: '开启 Nat和硬件识别 支持'
+        description: 'Enable NAT and hardware recognition support'
         required: true
         type: boolean
         default: true
       enable_kfgj:
-        description: '开发工具 集成'
+        description: 'Development tools integration'
         required: true
         type: boolean
         default: false
       enable_zip:
-        description: '压缩工具 集成'
+        description: 'Compression tools integration'
         required: true
         type: boolean
         default: true
       enable_docker:
-        description: 'Docker 集成'
+        description: 'Docker integration'
         required: true
         type: boolean
-        default: false    
+        default: false
       build_wayland_packages:
-        description: '触发 KDE Wayland 预编译包构建流程'
+        description: 'Trigger KDE Wayland precompiled package workflow'
         required: true
         type: boolean
         default: false
 
 jobs:
   # --------------------------------------------------------
-  # 阶段 1: setup (环境准备与变量生成)
+  # Phase 1: setup (Environment preparation and variable generation)
   # --------------------------------------------------------
   setup:
     runs-on: ubuntu-latest
@@ -122,10 +122,10 @@ jobs:
       build_id: ${{ steps.prep.outputs.build_id }}
       build_date: ${{ steps.prep.outputs.build_date }}
     steps:
-      - name: 检出代码库
+      - name: Checkout repository
         uses: actions/checkout@v5
 
-      - name: 解析用户的构建选择
+      - name: Parse user build choices
         id: find-templates
         run: |
           TARGET="${{ github.event.inputs.build_target }}"
@@ -167,27 +167,27 @@ jobs:
           esac
 
           if [ "$BUILD_KDE" = "mobile" ] && [ "$TARGET" != "Ubuntu-26-KDE" ] && [ "$TARGET" != "Debian-13-KDE" ] && [ "$TARGET" != "Fedora-43-KDE" ] && [ "$TARGET" != "Fedora-44-KDE" ] && [ "$TARGET" != "all-wayland" ]; then
-            echo "错误: 移动版 KDE 目前支持 Ubuntu-26-KDE、Debian-13-KDE、Fedora-43-KDE、Fedora-44-KDE、all-wayland" >&2
+            echo "Error: KDE mobile edition is currently supported on Ubuntu-26-KDE, Debian-13-KDE, Fedora-43-KDE, Fedora-44-KDE, all-wayland" >&2
             exit 1
           fi
 
           if [ "$ENABLE_ANLAND_KDE" = "true" ] && [ "$BUILD_KDE" = "none" ]; then
-            echo "错误: 启用 Wayland 支持时，KDE 桌面选择不能为 'none'" >&2
+            echo "Error: KDE desktop choice cannot be 'none' when Wayland support is enabled" >&2
             exit 1
           fi
 
           if [ "$BUILD_KDE" = "mobile" ]; then
-            echo "提示: 选择了移动版 KDE，Wayland 支持已强制启用"
+            echo "Notice: KDE mobile edition selected, Wayland support has been forced on"
             ENABLE_ANLAND_KDE="true"
           fi
 
           if [ "$ENABLE_ANLAND_KDE" = "true" ]; then
-            echo "提示: 选择了启用 Wayland 支持，PulseAudio 将被禁用，Anland app 自带音频"
+            echo "Notice: Wayland support enabled, PulseAudio will be disabled because the Anland app provides audio"
             PULSE_AUDIO="none"
           fi
 
           if [ "$BUILD_WAYLAND_PACKAGES" = "true" ] && [ -z "$WAYLAND_PACKAGE_TARGET" ]; then
-            echo "错误: KDE Wayland 预编译包仅支持 Debian-13-KDE、Ubuntu-26-KDE、Fedora-43-KDE、Fedora-44-KDE、all 或 all-wayland" >&2
+            echo "Error: KDE Wayland precompiled packages are only available for Debian-13-KDE, Ubuntu-26-KDE, Fedora-43-KDE, Fedora-44-KDE, all, or all-wayland" >&2
             exit 1
           fi
           
@@ -195,22 +195,22 @@ jobs:
           echo "wayland_enabled=$ENABLE_ANLAND_KDE" >> $GITHUB_OUTPUT
           echo "wayland_package_target=$WAYLAND_PACKAGE_TARGET" >> $GITHUB_OUTPUT
           echo "pulseaudio_effective=$PULSE_AUDIO" >> $GITHUB_OUTPUT
-          echo "最终决定的构建矩阵: $TEMPLATES"
-          echo "Wayland 支持最终值: $ENABLE_ANLAND_KDE"
-          echo "KDE Wayland 预编译包目标: ${WAYLAND_PACKAGE_TARGET:-none}"
-          echo "PulseAudio 最终值: $PULSE_AUDIO"
+          echo "Final decided build matrix: $TEMPLATES"
+          echo "Final Wayland support value: $ENABLE_ANLAND_KDE"
+          echo "Final KDE Wayland package target: ${WAYLAND_PACKAGE_TARGET:-none}"
+          echo "Final PulseAudio value: $PULSE_AUDIO"
 
-      - name: 准备构建元数据
+      - name: Prepare build metadata
         id: prep
         run: |
           BUILD_DATE=$(date +'%Y-%m-%d %H:%M:%S')
           BUILD_ID="v$(date +'%Y%m%d-%H%M%S')"
           echo "BUILD_DATE=$BUILD_DATE" >> $GITHUB_OUTPUT
           echo "BUILD_ID=$BUILD_ID" >> $GITHUB_OUTPUT
-          echo "构建 ID: $BUILD_ID"
+          echo "Build ID: $BUILD_ID"
 
   # --------------------------------------------------------
-  # 可选: 触发 KDE Wayland 预编译包构建
+  # Optional: trigger KDE Wayland package rebuild
   # --------------------------------------------------------
   build-wayland-packages:
     needs: setup
@@ -221,11 +221,11 @@ jobs:
       checks: read
       contents: read
     steps:
-      - name: 跳过 KDE Wayland 预编译包工作流
+      - name: Skip KDE Wayland package workflow
         if: ${{ github.event.inputs.build_wayland_packages != 'true' }}
-        run: echo "未启用 KDE Wayland 预编译包工作流触发。"
+        run: echo "KDE Wayland package workflow trigger is disabled."
 
-      - name: 触发并等待 KDE Wayland 预编译包工作流
+      - name: Trigger and wait for KDE Wayland precompiled package workflow
         if: ${{ github.event.inputs.build_wayland_packages == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
@@ -244,7 +244,7 @@ jobs:
             -f "inputs[commit_changes]=true" \
             -f "inputs[request_id]=$REQUEST_ID"
 
-          echo "已触发 build-kde-wayland.yml，build_target=$WAYLAND_PACKAGE_TARGET request_id=$REQUEST_ID"
+          echo "Triggered build-kde-wayland.yml with build_target=$WAYLAND_PACKAGE_TARGET request_id=$REQUEST_ID"
 
           run_id=""
           for attempt in {1..60}; do
@@ -260,20 +260,20 @@ jobs:
               break
             fi
 
-            echo "等待 build-kde-wayland.yml run 出现 ($attempt/60)..."
+            echo "Waiting for build-kde-wayland.yml run to appear ($attempt/60)..."
             sleep 10
           done
 
           if [ -z "$run_id" ]; then
-            echo "错误: 等待 build-kde-wayland.yml run 出现超时" >&2
+            echo "Error: timed out while waiting for build-kde-wayland.yml run to appear" >&2
             exit 1
           fi
 
-          echo "等待 build-kde-wayland.yml run $run_id 完成..."
+          echo "Waiting for build-kde-wayland.yml run $run_id to complete..."
           gh run watch "$run_id" --repo "${{ github.repository }}" --exit-status --interval 60
 
   # --------------------------------------------------------
-  # 阶段 2: build (常规 Linux 发行版 RootFS 的构建)
+  # Phase 2: build (Build of regular Linux distribution RootFS)
   # --------------------------------------------------------
   build:
     needs: [setup, build-wayland-packages]
@@ -284,20 +284,20 @@ jobs:
       matrix:
         template: ${{ fromJson(needs.setup.outputs.templates) }}
     steps:
-      - name: 检出代码库
+      - name: Checkout repository
         uses: actions/checkout@v5
         with:
           ref: ${{ github.ref_name }}
 
-      - name: 验证构建选项
+      - name: Verify build options
         run: |
           if [ "${{ inputs.build_KDE }}" = "none" ] && [ "${{ inputs.build_KDE_plus }}" = "true" ]; then
-            echo "❌ 错误: 当 KDE 桌面选择为 'none' 时，无法启用 KDE 开机自启动"
-            echo "请重新运行工作流，取消勾选 'KDE 桌面开机自启动' 或选择 KDE 桌面"
+            echo "❌ Error: Cannot enable KDE auto-start when KDE desktop choice is 'none'"
+            echo "Please re-run the workflow, uncheck 'KDE desktop auto-start on boot' or select a KDE desktop"
             exit 1
           fi
 
-      - name: 编译 RootFS (${{ matrix.template }})
+      - name: Build RootFS (${{ matrix.template }})
         run: |
           chmod +x build_rootfs-native.sh
           ./build_rootfs-native.sh \
@@ -319,7 +319,7 @@ jobs:
             -A "${{ needs.setup.outputs.wayland_enabled }}" \
             -u "${{ inputs.custom_username }}"
 
-      - name: 上传构建产物
+      - name: Upload build artifacts
         uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.template }}-rootfs
@@ -327,7 +327,7 @@ jobs:
           retention-days: 1
 
   # --------------------------------------------------------
-  # 阶段 3: release (汇总发布)
+  # Phase 3: release (Summary and release)
   # --------------------------------------------------------
   release:
     needs: [setup, build]
@@ -336,16 +336,16 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: 检出代码库
+      - name: Checkout repository
         uses: actions/checkout@v5
         
-      - name: 下载所有产物
+      - name: Download all artifacts
         uses: actions/download-artifact@v7
         with:
           pattern: "*-rootfs"
           merge-multiple: true
           
-      - name: 整理资源
+      - name: Organize resources
         run: |
           mkdir -p release_assets
           mv *.tar.xz release_assets/
@@ -357,36 +357,36 @@ jobs:
             sed -i "s/USERNAME=\"Gold\"/USERNAME=\"${CUSTOM_USERNAME}\"/g" "release_assets/on_aaudio_${PA_CHOICE}.sh"
           fi
           
-      - name: 创建统一 Release
+      - name: Create unified Release
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.setup.outputs.build_id }}
           name: "Droidspaces RootFS ${{ needs.setup.outputs.build_id }}"
           files: "release_assets/*"
           body: |
-            Droidspaces RootFS 自动构建
-            构建时间 : ${{ needs.setup.outputs.build_date }}
-            构建目标（用户指定）: ${{ github.event.inputs.build_target }}
-            构建 ID: ${{ needs.setup.outputs.build_id }}
+            Droidspaces RootFS Automated Build
+            Build Time: ${{ needs.setup.outputs.build_date }}
+            Build Target (User Specified): ${{ github.event.inputs.build_target }}
+            Build ID: ${{ needs.setup.outputs.build_id }}
 
-            构建选项:
-            - **自定义用户名**: ${{ github.event.inputs.custom_username }}
-            - **KDE 桌面**: ${{ github.event.inputs.build_KDE }}
-            - **KDE 开机自启动**: ${{ github.event.inputs.build_KDE_plus }}
-            - **Wayland 支持**: ${{ needs.setup.outputs.wayland_enabled }}
-            - KDE Wayland 预编译包目标: ${{ needs.setup.outputs.wayland_package_target || 'none' }}
-            - PulseAudio 音频转发: ${{ needs.setup.outputs.pulseaudio_effective }}
-            - anland 音频说明: Wayland 模式下使用 anland app 自带音频，无需 PulseAudio
+            Build Options:
+            - **Custom Username**: ${{ github.event.inputs.custom_username }}
+            - **KDE Desktop**: ${{ github.event.inputs.build_KDE }}
+            - **KDE Auto-start**: ${{ github.event.inputs.build_KDE_plus }}
+            - **Wayland support**: ${{ needs.setup.outputs.wayland_enabled }}
+            - KDE Wayland package target: ${{ needs.setup.outputs.wayland_package_target || 'none' }}
+            - PulseAudio Audio Forwarding: ${{ needs.setup.outputs.pulseaudio_effective }}
+            - anland audio note: Wayland mode uses the built-in anland app audio, so PulseAudio is not needed
             - nosnap: ${{ github.event.inputs.nosnap }}
-            - 使用中文作为主语言: ${{ github.event.inputs.enable_zh_tz }}
-            - 高通骁龙 GPU 支持: ${{ github.event.inputs.enable_mesa }}
-            - 集成 TMOE : ${{ github.event.inputs.enable_tmoe }}
-            - 输入法 fcitx5 支持: ${{ github.event.inputs.enable_srf }}
-            - 跨架构支持: ${{ github.event.inputs.enable_binfmt }}
-            - 容器硬件与网络识别支持: ${{ github.event.inputs.enable_yj }}
-            - 开发工具集成: ${{ github.event.inputs.enable_kfgj }}
-            - 压缩工具集成: ${{ github.event.inputs.enable_zip }}
-            - Docker 集成: ${{ github.event.inputs.enable_docker }}
+            - Use Chinese as Primary Language: ${{ github.event.inputs.enable_zh_tz }}
+            - Qualcomm Snapdragon GPU Support: ${{ github.event.inputs.enable_mesa }}
+            - Integrate TMOE: ${{ github.event.inputs.enable_tmoe }}
+            - Input Method fcitx5 Support: ${{ github.event.inputs.enable_srf }}
+            - Cross-architecture Support: ${{ github.event.inputs.enable_binfmt }}
+            - Container Hardware and Network Recognition Support: ${{ github.event.inputs.enable_yj }}
+            - Development Tools Integration: ${{ github.event.inputs.enable_kfgj }}
+            - Compression Tools Integration: ${{ github.event.inputs.enable_zip }}
+            - Docker Integration: ${{ github.event.inputs.enable_docker }}
             
           draft: false
           prerelease: false

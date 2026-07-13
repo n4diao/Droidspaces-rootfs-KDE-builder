@@ -1,5 +1,5 @@
 ARG TARGETPLATFORM
-FROM ubuntu:25.10 AS customizer
+FROM ubuntu:26.04 AS customizer
 
 #######################################################
 ARG BUILD_KDE
@@ -14,6 +14,7 @@ ARG ENABLE_zip_ARG
 ARG ENABLE_docker_ARG
 ARG ENABLE_srf_ARG
 ARG ENABLE_tmoe_ARG
+ARG ENABLE_anland_kde_ARG
 ARG ENABLE_nosnap_ARG
 ARG USERNAME
 ######################################################
@@ -35,8 +36,15 @@ COPY scripts/nosnap.sh /usr/local/sbin/nosnap
 # 将自定义的 bashrc 脚本复制到根文件系统的 profile 目录
 COPY scripts/bashrc.sh /etc/profile.d/ds-aliases.sh
 
+# 修复骁龙8gen2设备在Wayland的花屏问题
+COPY scripts/enable_tp_ubwc.sh /etc/profile.d/enable_tp_ubwc.sh
+
+# 复制本仓库内预编译的 anland_kde deb 包
+COPY anland-build/ubuntu2604/kwin/*.deb /tmp/anland-build/ubuntu2604/kwin/
+COPY anland-build/ubuntu2604/xwayland/*.deb /tmp/anland-build/ubuntu2604/xwayland/
+
 # 赋予相关脚本可执行权限
-RUN chmod +x /usr/local/bin/download-firmware /usr/local/sbin/nosnap /etc/profile.d/ds-aliases.sh
+RUN chmod +x /usr/local/bin/download-firmware /usr/local/sbin/nosnap /etc/profile.d/ds-aliases.sh /etc/profile.d/enable_tp_ubwc.sh
 
 RUN sed -i 's/Components: main/Components: main restricted universe multiverse/g' /etc/apt/sources.list.d/ubuntu.sources 2>/dev/null || \
     sed -i 's/main/main restricted universe multiverse/g' /etc/apt/sources.list 2>/dev/null && \
@@ -55,7 +63,7 @@ RUN sed -i 's/Components: main/Components: main restricted universe multiverse/g
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     # 核心工具组件
-    bash jq dialog coreutils file findutils grep sed gawk curl wget ca-certificates locales bash-completion udev dbus systemd-sysv systemd-resolved fastfetch \
+    bash jq dialog coreutils file findutils grep sed gawk curl wget ca-certificates locales bash-completion udev dbus systemd-sysv systemd-resolved fastfetch pciutils \
     # 用户请求的基础开发/编辑工具
     git nano sudo \
     # 网络与 SSH 工具
@@ -84,6 +92,40 @@ RUN apt-get update && \
         kfind plasma-systemmonitor filelight glmark2 vkmark systemsettings kde-config-screenlocker kio-extras xdg-user-dirs dolphin-plugins ffmpegthumbs kdegraphics-thumbnailers \
         kimageformat6-plugins plasma-browser-integration libcanberra-pulse gstreamer1.0-plugins-base gstreamer1.0-plugins-good sound-theme-freedesktop \
         polkit-kde-agent-1 libpam-systemd libpam-modules libpam-kwallet5 plasma-session-x11 language-pack-kde-zh-hans language-pack-zh-hans qt6-translations-l10n; \
+    fi && \
+    # mobile版KDE
+    if [ "$BUILD_KDE" = "mobile" ]; then \
+        apt-get install -y --no-install-recommends \
+        dbus-x11 x11-xserver-utils fonts-noto-cjk fonts-noto-color-emoji wayland-utils xserver-xorg dbus-user-session \
+        plasma-nano plasma-mobile plasma-mobile-phone maliit-keyboard maliit-framework maliit-server-qt6 \
+        kwin-wayland pipewire pipewire-pulse wireplumber powerdevil plasma-pa upower pulseaudio-utils \
+        konsole dolphin kate kinfocenter mesa-utils vulkan-tools \
+        systemsettings plasma-systemmonitor kde-config-screenlocker kio-extras xdg-user-dirs \
+        dolphin-plugins ffmpegthumbs kdegraphics-thumbnailers kimageformat6-plugins plasma-settings angelfish \
+        gstreamer1.0-plugins-base gstreamer1.0-plugins-good sound-theme-freedesktop libcanberra-pulse \
+        polkit-kde-agent-1 libpam-systemd libpam-modules libpam-kwallet5 qml6-module-org-kde-kirigami qml6-module-qtquick-controls \
+        qml6-module-qtquick-layouts qml6-module-qtquick-templates language-pack-kde-zh-hans language-pack-zh-hans qt6-translations-l10n && \
+        echo "--> [mobile] 正在移除 ModemManager (容器内无真实 modem 硬件，会导致开机卡住)..." && \
+        apt-get purge -y --auto-remove modemmanager || true; \
+    fi && \
+    ############################################## anland_kde(wayland) 支持 ################################################
+    if [ "$ENABLE_anland_kde_ARG" = "true" ] && [ "$BUILD_KDE" != "none" ]; then \
+        echo "--> [开启] 正在安装 anland_kde..." && \
+        echo "--> [开启] 正在安装预编译的 kwin deb 包..." && \
+        dpkg -i /tmp/anland-build/ubuntu2604/kwin/*.deb || apt-get install -f -y && \
+        echo "--> [开启] 正在安装预编译的 xwayland deb 包..." && \
+        dpkg -i /tmp/anland-build/ubuntu2604/xwayland/*.deb || apt-get install -f -y && \
+        echo "--> [开启] 设置预编译 deb 包为 hold 模式，防止被 apt 更新覆盖..." && \
+        for f in /tmp/anland-build/ubuntu2604/kwin/*.deb /tmp/anland-build/ubuntu2604/xwayland/*.deb; do \
+            pkgname=$(dpkg-deb -f "$f" Package) && \
+            apt-mark hold "$pkgname" && \
+            echo "    hold: $pkgname"; \
+        done && \
+        echo "--> [开启] 清理临时文件..." && \
+        rm -rf /tmp/anland-build && \
+        echo "--> [开启] anland_kde 支持已安装"; \
+    else \
+        rm -rf /tmp/anland-build; \
     fi && \
     ######################################################################################################
     #输入法 fcitx5 (可选)
@@ -148,14 +190,33 @@ RUN sed -i '/en_US.UTF-8/s/^# //' /etc/locale.gen && \
 # 添加环境变量
 RUN cat <<'EOF' > /etc/environment
 XCURSOR_SIZE=48
-DISPLAY=:5
 EOF
+# wayland 显示服务器环境变量配置
+RUN if [ "$ENABLE_anland_kde_ARG" != "true" ] ; then \
+        echo "DISPLAY=:5" >> /etc/environment; \
+    else \
+        echo "WAYLAND_DISPLAY=wayland-0" >> /etc/environment; \
+        echo "QT_QPA_PLATFORM=wayland" >> /etc/environment; \
+        echo "ANLAND=1" >> /etc/environment; \
+        echo "ANLAND_SOCKET=/run/display.sock" >> /etc/environment; \
+        echo "ANLAND_DRM_DEVICE=/dev/dri/renderD128" >> /etc/environment; \
+        echo "MESA_LOADER_DRIVER_OVERRIDE=kgsl" >> /etc/environment; \
+        echo "GALLIUM_DRIVER=kgsl" >> /etc/environment; \
+        echo "FD_FORCE_KGSL=1" >> /etc/environment; \
+    fi
+
 # 音频选择
 RUN if [ "$PulseAudio" = "socket" ]; then \
         echo "PULSE_SERVER=unix:/tmp/.pulse-socket" >> /etc/environment; \
     elif [ "$PulseAudio" = "tcp" ]; then \
         echo "PULSE_SERVER=tcp:127.0.0.1:4713" >> /etc/environment; \
     fi
+# 修复anland 音频堵塞
+# RUN if [ "$ENABLE_anland_kde_ARG" = "true" ]; then \
+#        mkdir -p /home/${USERNAME}/.config && \
+#       echo -e "\n[Sounds]\nEnable=false" >> /home/${USERNAME}/.config/kdeglobals ; \
+#     fi
+
 
 # 输入法开机自启动及 KDE 配置
 COPY scripts/start/ /tmp/droidspaces-start/
@@ -183,7 +244,7 @@ SDL_IM_MODULE=fcitx5
 GLFW_IM_MODULE=fcitx
 EOF
 fi
-    if [ "$ENABLE_mesa_ARG" = "true" ] ; then
+    if [ "$ENABLE_mesa_ARG" = "true" ] && [ "$ENABLE_anland_kde_ARG" != "true" ] ; then
         cat <<'EOF' >> /etc/environment
 MESA_LOADER_DRIVER_OVERRIDE=kgsl
 TU_DEBUG=noconform
@@ -199,10 +260,23 @@ Enabled=false
 EOF
     fi
     chown -R ${USERNAME}:${USERNAME} /home/${USERNAME}
-    if [ "$BUILD_KDE_plus" = "true" ] ; then
+    # KDE X11 自启动
+    if [ "$BUILD_KDE_plus" = "true" ] && [ "$ENABLE_anland_kde_ARG" = "false" ] && [ "$BUILD_KDE" != "mobile" ] ; then
     install -Dm644 /tmp/droidspaces-start/plasma-x11.service /etc/systemd/system/plasma-x11.service
     mkdir -p /etc/systemd/system/multi-user.target.wants
     ln -sf /etc/systemd/system/plasma-x11.service /etc/systemd/system/multi-user.target.wants/plasma-x11.service
+    fi
+    # KDE mobile 自启动
+    if [ "$BUILD_KDE_plus" = "true" ] && [ "$BUILD_KDE" = "mobile" ] ; then
+    install -Dm644 /tmp/droidspaces-start/plasma-mobile.service /etc/systemd/system/plasma-mobile.service
+    mkdir -p /etc/systemd/system/multi-user.target.wants
+    ln -sf /etc/systemd/system/plasma-mobile.service /etc/systemd/system/multi-user.target.wants/plasma-mobile.service
+    fi
+    # KDE wayland 自启动
+    if [ "$BUILD_KDE_plus" = "true" ] && [ "$ENABLE_anland_kde_ARG" = "true" ] && [ "$BUILD_KDE" != "mobile" ] ; then
+    install -Dm644 /tmp/droidspaces-start/plasma-wayland.service /etc/systemd/system/plasma-wayland.service
+    mkdir -p /etc/systemd/system/multi-user.target.wants
+    ln -sf /etc/systemd/system/plasma-wayland.service /etc/systemd/system/multi-user.target.wants/plasma-wayland.service
     fi
     rm -rf /tmp/droidspaces-start
 EOF_RUN
@@ -211,7 +285,7 @@ EOF_RUN
 RUN if [ "$ENABLE_mesa_ARG" = "true" ]; then \
         echo "--> [开启] 正在下载并安装最新版 Mesa 驱动..." && \
         URL=$(curl -s https://api.github.com/repos/lfdevs/mesa-for-android-container/releases/latest | \
-        jq -r '.assets[] | select(.name | test("mesa-for-android-container_.*_ubuntu_questing_arm64\\.tar\\.gz")) | .browser_download_url' | head -1) && \
+        jq -r '.assets[] | select(.name | test("mesa-for-android-container_.*_ubuntu_resolute_arm64\\.tar\\.gz")) | .browser_download_url' | head -1) && \
         if [ -z "$URL" ] || [ "$URL" = "null" ]; then echo "获取下载链接失败，可能是源仓库还没有提供 Ubuntu 版本的 Mesa 驱动或触发了限制"; exit 1; fi && \
         wget -q --tries=5 --waitretry=3 -O /tmp/mesa.tar.gz "$URL" && \
         tar -zxf /tmp/mesa.tar.gz -C / && \
@@ -220,7 +294,6 @@ RUN if [ "$ENABLE_mesa_ARG" = "true" ]; then \
     else \
         echo "--> [跳过] 未开启 Mesa 驱动安装"; \
     fi
-
 # 修复容器内的 DHCP 网络服务配置
 RUN mkdir -p /etc/systemd/network && \
     cat <<'EOF' > /etc/systemd/network/10-eth-dhcp.network
@@ -366,10 +439,12 @@ RUN if [ "$ENABLE_binfmt_ARG" = "true" ]; then \
         apt-get autoclean && \
         rm -rf /var/lib/binfmts/* /etc/binfmt.d/* /usr/lib/binfmt.d/qemu-* && \
         dpkg --add-architecture amd64 && \
-        sed -i '/^Types: deb$/a Architectures: arm64 armhf' /etc/apt/sources.list.d/ubuntu.sources && \
-        printf "Types: deb\nURIs: http://archive.ubuntu.com/ubuntu/\nSuites: questing questing-updates questing-security\nComponents: main universe restricted multiverse\nArchitectures: amd64\nSigned-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\n" > /etc/apt/sources.list.d/ubuntu-amd64.sources && \
+        sed -i '/^Types: deb/a Architectures: arm64' /etc/apt/sources.list.d/ubuntu.sources && \
+        printf "Types: deb\nURIs: http://archive.ubuntu.com/ubuntu/\nSuites: resolute resolute-updates resolute-security\nComponents: main universe restricted multiverse\nArchitectures: amd64\nSigned-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\n" > /etc/apt/sources.list.d/ubuntu-amd64.sources && \
         apt-get update && \
-        apt-get install -y --no-install-recommends qemu-user-static binfmt-support libc6:amd64; \
+        (apt-get install -y --no-install-recommends qemu-user-binfmt libc6:amd64 libc6:arm64 libc-bin || \
+         apt-get install -y --no-install-recommends qemu-user-binfmt) && \
+        apt-get clean; \
     else \
         rm -f /usr/local/bin/qemu-binfmt-register.sh /etc/systemd/system/qemu-binfmt-register.service; \
     fi
